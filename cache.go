@@ -19,11 +19,11 @@ type Node struct {
 }
 
 type Upstream interface {
-	Get(interface{}) (interface{}, error)
+	Fetch(interface{}) (interface{}, error)
 }
 type UpstreamFunc func(interface{}) (interface{}, error)
 
-func (f UpstreamFunc) Get(x interface{}) (interface{}, error) {
+func (f UpstreamFunc) Fetch(x interface{}) (interface{}, error) {
 	return f(x)
 }
 
@@ -45,6 +45,8 @@ type Cache struct {
 	responses chan *Node
 
 	add chan *Node
+	// hits int64
+	// miss int64
 }
 
 func (c *Cache) incr(n *Node) {
@@ -88,8 +90,8 @@ func (c *Cache) evict(n *Node) {
 
 func (c *Cache) Run(ctx context.Context) context.Context {
 	c.add = make(chan *Node, 2*(c.MaxItems+1))
-	c.requests = make(chan interface{})
-	c.responses = make(chan *Node)
+	c.requests = make(chan interface{}, 2*(c.MaxItems+1))
+	c.responses = make(chan *Node, 2*(c.MaxItems+1))
 	c.nodes = make(map[interface{}]*Node)
 
 	// fetching := make(map[interface{}]bool)
@@ -112,8 +114,6 @@ func (c *Cache) Run(ctx context.Context) context.Context {
 			select {
 			case <-ctx.Done():
 				return
-			// case x := <- x.queue:
-			// 	if len(fetching)
 			case n := <-evict:
 				c.evict(n)
 			case n := <-c.add:
@@ -129,28 +129,40 @@ func (c *Cache) Run(ctx context.Context) context.Context {
 				}
 			case x := <-c.requests:
 				if n := c.nodes[x]; n != nil {
-					if n.Exp.After(time.Now()) {
+					if c.MaxAge > 0 && n.Exp.Before(time.Now()) {
+						// c.miss++
 						c.responses <- nil
 						evict <- n
+					} else {
+						// c.hits++
+						c.incr(n)
+						c.responses <- n
 					}
-					c.incr(n)
-					c.responses <- n
+				} else {
+					// c.miss++
+					c.responses <- nil
+
 				}
-				c.responses <- nil
 			}
 		}
 	}()
 	return ctx
 }
 
-func (c *Cache) Get(x interface{}) (interface{}, error) {
+func (c *Cache) Get(x interface{}) (interface{}, bool, error) {
 	c.requests <- x
 	n := <-c.responses
 	if n == nil {
-		return c.fetch(x)
+		y, err := c.fetch(x)
+		return y, false, err
 	} else {
-		return n.Data, nil
+		return n.Data, true, nil
 	}
+}
+
+func (c *Cache) Fetch(x interface{}) (interface{}, error) {
+	y, _, err := c.Get(x)
+	return y, err
 }
 
 func (c *Cache) node(x interface{}, y interface{}) *Node {
@@ -172,7 +184,7 @@ func (c *Cache) fetch(x interface{}) (interface{}, error) {
 	rc := make(chan interface{}, 1)
 	ec := make(chan error, 1)
 	go func() {
-		y, err := c.Upstream.Get(x)
+		y, err := c.Upstream.Fetch(x)
 		if err == nil {
 			c.add <- c.node(x, y)
 		}

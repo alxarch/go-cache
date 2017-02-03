@@ -22,7 +22,7 @@ func Test_Cache(t *testing.T) {
 	if ctx != ctx2 {
 		t.Error("Not same ctx")
 	}
-	y, yerr := c.Get("test")
+	y, yhit, yerr := c.Get("test")
 	if yerr != nil {
 		t.Error("Cache error")
 	}
@@ -30,18 +30,24 @@ func Test_Cache(t *testing.T) {
 	if !ok {
 		t.Error("Invalid response type")
 	}
+	if yhit {
+		t.Error("No cache hit")
+	}
 	if yn != 1 {
 		t.Error("Invalid response value")
 	}
 	// Give time to the parallel fetching to return
 	time.Sleep(10 * time.Millisecond)
-	z, zerr := c.Get("test")
+	z, zhit, zerr := c.Get("test")
 	if zerr != nil {
 		t.Error("Cache error")
 	}
 	zn, ok := z.(int64)
 	if !ok {
 		t.Error("Invalid response type")
+	}
+	if !zhit {
+		t.Error("No cache hit")
 	}
 	if zn != 1 {
 		t.Error("Too many requests %d", zn)
