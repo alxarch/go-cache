@@ -13,7 +13,7 @@ func Test_Cache(t *testing.T) {
 
 	var n int64 = 0
 	c := &cache.Cache{
-		Upstream: cache.GetterFunc(func(x interface{}) (interface{}, error) {
+		Upstream: cache.UpstreamFunc(func(x interface{}) (interface{}, error) {
 			return atomic.AddInt64(&n, 1), nil
 		}),
 	}

@@ -18,17 +18,17 @@ type Node struct {
 	Prev     *Node
 }
 
-type Getter interface {
+type Upstream interface {
 	Get(interface{}) (interface{}, error)
 }
-type GetterFunc func(interface{}) (interface{}, error)
+type UpstreamFunc func(interface{}) (interface{}, error)
 
-func (f GetterFunc) Get(x interface{}) (interface{}, error) {
+func (f UpstreamFunc) Get(x interface{}) (interface{}, error) {
 	return f(x)
 }
 
 type Cache struct {
-	Upstream Getter
+	Upstream Upstream
 	MaxAge   time.Duration
 	MaxItems int
 
