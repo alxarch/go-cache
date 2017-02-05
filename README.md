@@ -7,3 +7,4 @@ MaxAge and LRU cache for golang
   - Cap parallel requests
   - Avoid duplicate requests (add backoff?)
   - Add requests count threshold for evictions
+  - Goroutine to evict expired nodes
