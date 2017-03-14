@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"container/list"
 	"context"
 	"sync"
 	"time"
@@ -14,8 +15,7 @@ type Node struct {
 	Data     interface{}
 	Exp      time.Time
 	Requests int64
-	Next     *Node
-	Prev     *Node
+	Element  *list.Element
 }
 
 type Upstream interface {
@@ -35,11 +35,8 @@ type Cache struct {
 	// MaxQueueSize int
 
 	nodes map[interface{}]*Node
-	head  *Node
-	tail  *Node
+	lst   *list.List
 	pool  *sync.Pool
-
-	// queue chan interface{}
 
 	requests  chan interface{}
 	responses chan *Node
@@ -49,42 +46,9 @@ type Cache struct {
 	// miss int64
 }
 
-func (c *Cache) incr(n *Node) {
-	if nil == n {
-		return
-	}
-	n.Requests++
-	if c.head == n {
-		return
-	}
-	if n.Prev != nil {
-		n.Prev.Next = n.Next
-	}
-	if n.Next != nil {
-		n.Next.Prev = n.Prev
-		if c.tail == n {
-			c.tail = n.Next
-		}
-	}
-	n.Prev = c.head
-	n.Next = nil
-	c.head = n
-}
-
 func (c *Cache) evict(n *Node) {
 	delete(c.nodes, n.Key)
-	if n.Prev != nil {
-		n.Prev.Next = n.Next
-	}
-	if n.Next != nil {
-		n.Next.Prev = n.Prev
-	}
-	if n == c.tail {
-		c.tail = n.Next
-	}
-	if n == c.head {
-		c.head = n.Prev
-	}
+	c.lst.Remove(n.Element)
 	c.pool.Put(n)
 }
 
@@ -93,6 +57,7 @@ func (c *Cache) Run(ctx context.Context) context.Context {
 	c.requests = make(chan interface{}, 2*(c.MaxItems+1))
 	c.responses = make(chan *Node, 2*(c.MaxItems+1))
 	c.nodes = make(map[interface{}]*Node)
+	c.lst = list.New()
 
 	// fetching := make(map[interface{}]bool)
 	// c.queue = make(chan interface{}, c.MaxQueueSize + 1)
@@ -118,15 +83,14 @@ func (c *Cache) Run(ctx context.Context) context.Context {
 				c.evict(n)
 			case n := <-c.add:
 				if c.MaxItems > 0 && len(c.nodes) > c.MaxItems {
-					evict <- c.tail
+					if el := c.lst.Back(); el != nil {
+						if e, ok := el.Value.(*Node); ok {
+							evict <- e
+						}
+					}
 				}
 				c.nodes[n.Key] = n
-				if nil == c.tail {
-					c.tail = n
-				}
-				if nil == c.head {
-					c.head = n
-				}
+				n.Element = c.lst.PushFront(n)
 			case x := <-c.requests:
 				if n := c.nodes[x]; n != nil {
 					if c.MaxAge > 0 && n.Exp.Before(time.Now()) {
@@ -135,7 +99,10 @@ func (c *Cache) Run(ctx context.Context) context.Context {
 						evict <- n
 					} else {
 						// c.hits++
-						c.incr(n)
+						if el := n.Element; el != nil {
+							c.lst.MoveToFront(el)
+						}
+						n.Requests++
 						c.responses <- n
 					}
 				} else {
@@ -174,8 +141,6 @@ func (c *Cache) node(x interface{}, y interface{}) *Node {
 	}
 	n.Key = x
 	n.Data = y
-	n.Next = nil
-	n.Prev = nil
 	n.Requests = 0
 	return n
 }
