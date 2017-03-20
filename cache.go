@@ -3,6 +3,7 @@ package cache
 import (
 	"container/list"
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -145,7 +146,14 @@ func (c *Cache) node(x interface{}, y interface{}) *Node {
 	return n
 }
 
+var (
+	NoUpstreamError = errors.New("No Upstream assigned to cache")
+)
+
 func (c *Cache) fetch(x interface{}) (interface{}, error) {
+	if nil == c.Upstream {
+		return nil, NoUpstreamError
+	}
 	rc := make(chan interface{}, 1)
 	ec := make(chan error, 1)
 	go func() {
