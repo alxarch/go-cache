@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,11 +30,10 @@ func (f UpstreamFunc) Fetch(x interface{}) (interface{}, error) {
 }
 
 type Cache struct {
-	Upstream Upstream
-	MaxAge   time.Duration
-	MaxItems int
-
-	// MaxQueueSize int
+	Namespace string
+	Upstream  Upstream
+	MaxAge    time.Duration
+	MaxItems  int
 
 	nodes map[interface{}]*Node
 	lst   *list.List
@@ -41,10 +41,14 @@ type Cache struct {
 
 	requests  chan interface{}
 	responses chan *Node
+	add       chan *Node
 
-	add chan *Node
-	// hits int64
-	// miss int64
+	stats struct {
+		hit      uint64
+		miss     uint64
+		maxage   uint64
+		maxitems uint64
+	}
 }
 
 func (c *Cache) evict(n *Node) {
@@ -53,15 +57,21 @@ func (c *Cache) evict(n *Node) {
 	c.pool.Put(n)
 }
 
-func (c *Cache) Run(ctx context.Context) context.Context {
+func (c *Cache) Stats() (uint64, uint64, uint64, uint64) {
+	return atomic.LoadUint64(&c.stats.hit), atomic.LoadUint64(&c.stats.miss),
+		atomic.LoadUint64(&c.stats.maxage), atomic.LoadUint64(&c.stats.maxitems)
+}
+
+func (c *Cache) RunInContext(ctx context.Context) (context.Context, error) {
+	if nil != c.requests {
+		return ctx, errors.New("Cache already running")
+	}
 	c.add = make(chan *Node, 2*(c.MaxItems+1))
 	c.requests = make(chan interface{}, 2*(c.MaxItems+1))
 	c.responses = make(chan *Node, 2*(c.MaxItems+1))
 	c.nodes = make(map[interface{}]*Node)
 	c.lst = list.New()
 
-	// fetching := make(map[interface{}]bool)
-	// c.queue = make(chan interface{}, c.MaxQueueSize + 1)
 	c.pool = &sync.Pool{
 		New: func() interface{} {
 			return &Node{}
@@ -86,6 +96,7 @@ func (c *Cache) Run(ctx context.Context) context.Context {
 				if c.MaxItems > 0 && len(c.nodes) > c.MaxItems {
 					if el := c.lst.Back(); el != nil {
 						if e, ok := el.Value.(*Node); ok {
+							c.stats.maxitems++
 							evict <- e
 						}
 					}
@@ -95,26 +106,26 @@ func (c *Cache) Run(ctx context.Context) context.Context {
 			case x := <-c.requests:
 				if n := c.nodes[x]; n != nil {
 					if c.MaxAge > 0 && n.Exp.Before(time.Now()) {
-						// c.miss++
 						c.responses <- nil
+						c.stats.maxage++
 						evict <- n
 					} else {
-						// c.hits++
 						if el := n.Element; el != nil {
 							c.lst.MoveToFront(el)
 						}
 						n.Requests++
+						c.stats.hit++
 						c.responses <- n
 					}
 				} else {
-					// c.miss++
+					c.stats.miss++
 					c.responses <- nil
 
 				}
 			}
 		}
 	}()
-	return ctx
+	return ctx, nil
 }
 
 func (c *Cache) Get(x interface{}) (interface{}, bool, error) {
@@ -133,12 +144,14 @@ func (c *Cache) Fetch(x interface{}) (interface{}, error) {
 	return y, err
 }
 
+var zerotime = time.Time{}
+
 func (c *Cache) node(x interface{}, y interface{}) *Node {
 	n, _ := c.pool.Get().(*Node)
 	if c.MaxAge > 0 {
 		n.Exp = time.Now().Add(c.MaxAge)
 	} else {
-		n.Exp = time.Time{}
+		n.Exp = zerotime
 	}
 	n.Key = x
 	n.Data = y

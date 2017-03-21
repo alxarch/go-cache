@@ -18,7 +18,7 @@ func Test_Cache(t *testing.T) {
 		}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx2 := c.Run(ctx)
+	ctx2, _ := c.RunInContext(ctx)
 	if ctx != ctx2 {
 		t.Error("Not same ctx")
 	}
@@ -51,6 +51,13 @@ func Test_Cache(t *testing.T) {
 	}
 	if zn != 1 {
 		t.Error("Too many requests %d", zn)
+	}
+	h, m, _, _ := c.Stats()
+	if h != 1 {
+		t.Error("Wrong number of hits %d", h)
+	}
+	if m != 1 {
+		t.Error("Wrong number of miss %d", h)
 	}
 
 	cancel()
