@@ -62,9 +62,12 @@ func (c *Cache) Stats() (uint64, uint64, uint64, uint64) {
 		atomic.LoadUint64(&c.stats.maxage), atomic.LoadUint64(&c.stats.maxitems)
 }
 
-func (c *Cache) RunInContext(ctx context.Context) (context.Context, error) {
+func (c *Cache) Run(ctx context.Context) error {
 	if nil != c.requests {
-		return ctx, errors.New("Cache already running")
+		return errors.New("Cache already running")
+	}
+	if nil == ctx {
+		ctx = context.Background()
 	}
 	c.add = make(chan *Node, 2*(c.MaxItems+1))
 	c.requests = make(chan interface{}, 2*(c.MaxItems+1))
@@ -125,7 +128,7 @@ func (c *Cache) RunInContext(ctx context.Context) (context.Context, error) {
 			}
 		}
 	}()
-	return ctx, nil
+	return nil
 }
 
 func (c *Cache) Get(x interface{}) (interface{}, bool, error) {
