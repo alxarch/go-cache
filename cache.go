@@ -20,15 +20,6 @@ type Node struct {
 	Element  *list.Element
 }
 
-type Upstream interface {
-	Fetch(interface{}) (interface{}, error)
-}
-type UpstreamFunc func(interface{}) (interface{}, error)
-
-func (f UpstreamFunc) Fetch(x interface{}) (interface{}, error) {
-	return f(x)
-}
-
 type Cache struct {
 	Namespace string
 	Upstream  Upstream
@@ -142,6 +133,7 @@ func (c *Cache) Get(x interface{}) (interface{}, bool, error) {
 	}
 }
 
+// Fetch implements the Upstream interface for a cache
 func (c *Cache) Fetch(x interface{}) (interface{}, error) {
 	y, _, err := c.Get(x)
 	return y, err

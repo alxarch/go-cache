@@ -18,10 +18,7 @@ func Test_Cache(t *testing.T) {
 		}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx2, _ := c.RunInContext(ctx)
-	if ctx != ctx2 {
-		t.Error("Not same ctx")
-	}
+	c.Run(ctx)
 	y, yhit, yerr := c.Get("test")
 	if yerr != nil {
 		t.Error("Cache error")
