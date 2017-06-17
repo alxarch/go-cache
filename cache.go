@@ -1,176 +1,166 @@
 package cache
 
 import (
-	"container/list"
-	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const DefaultMaxItems = 1000
-const DefaultExpireInterval = time.Second
+var (
+	// KeyError is returned by Get if a key is not found in the cache.
+	KeyError     = errors.New("Key not found.")
+	ExpiredError = errors.New("Key expired.")
+	// MaxSizeError is returned by Set on implementations of Interface that have max size limits.
+	MaxSizeError = errors.New("Cache full.")
+)
 
-type Node struct {
-	Key      interface{}
-	Data     interface{}
-	Exp      time.Time
-	Requests int64
-	Element  *list.Element
+// Interface is the common cache interface for all implementations.
+type Interface interface {
+	// Interface implements Upstream and returns KeyError if a key is not found in cache.
+	Upstream
+	// Set assigns a value to a key and sets the expiration time
+	Set(key, value interface{}, exp *time.Time) error
+	// Evict drops the provided keys from cache (if they exist) and returns the new size of the cache.
+	// Calling Evict without arguments returns the current cache size.
+	Evict(keys ...interface{}) (size int)
 }
 
-type Cache struct {
-	Namespace string
-	Upstream  Upstream
-	MaxAge    time.Duration
-	MaxItems  int
-
-	nodes map[interface{}]*Node
-	lst   *list.List
-	pool  *sync.Pool
-
-	requests  chan interface{}
-	responses chan *Node
-	add       chan *Node
-
-	stats struct {
-		hit      uint64
-		miss     uint64
-		maxage   uint64
-		maxitems uint64
-	}
-}
-
-func (c *Cache) evict(n *Node) {
-	delete(c.nodes, n.Key)
-	c.lst.Remove(n.Element)
-	c.pool.Put(n)
-}
-
-func (c *Cache) Stats() (uint64, uint64, uint64, uint64) {
-	return atomic.LoadUint64(&c.stats.hit), atomic.LoadUint64(&c.stats.miss),
-		atomic.LoadUint64(&c.stats.maxage), atomic.LoadUint64(&c.stats.maxitems)
-}
-
-func (c *Cache) Run(ctx context.Context) error {
-	if nil != c.requests {
-		return errors.New("Cache already running")
-	}
-	if nil == ctx {
-		ctx = context.Background()
-	}
-	c.add = make(chan *Node, 2*(c.MaxItems+1))
-	c.requests = make(chan interface{}, 2*(c.MaxItems+1))
-	c.responses = make(chan *Node, 2*(c.MaxItems+1))
-	c.nodes = make(map[interface{}]*Node)
-	c.lst = list.New()
-
-	c.pool = &sync.Pool{
-		New: func() interface{} {
-			return &Node{}
-		},
-	}
-
-	evict := make(chan *Node, 2*(c.MaxItems+1))
-
-	go func() {
-		defer close(evict)
-		defer close(c.add)
-		defer close(c.requests)
-		defer close(c.responses)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case n := <-evict:
-				c.evict(n)
-			case n := <-c.add:
-				if c.MaxItems > 0 && len(c.nodes) > c.MaxItems {
-					if el := c.lst.Back(); el != nil {
-						if e, ok := el.Value.(*Node); ok {
-							c.stats.maxitems++
-							evict <- e
-						}
-					}
-				}
-				c.nodes[n.Key] = n
-				n.Element = c.lst.PushFront(n)
-			case x := <-c.requests:
-				if n := c.nodes[x]; n != nil {
-					if c.MaxAge > 0 && n.Exp.Before(time.Now()) {
-						c.responses <- nil
-						c.stats.maxage++
-						evict <- n
-					} else {
-						if el := n.Element; el != nil {
-							c.lst.MoveToFront(el)
-						}
-						n.Requests++
-						c.stats.hit++
-						c.responses <- n
-					}
-				} else {
-					c.stats.miss++
-					c.responses <- nil
-
-				}
-			}
-		}
-	}()
+// Never is a helper that returns a nil expiration time.
+func Never() *time.Time {
 	return nil
 }
 
-func (c *Cache) Get(x interface{}) (interface{}, bool, error) {
-	c.requests <- x
-	n := <-c.responses
-	if n == nil {
-		y, err := c.fetch(x)
-		return y, false, err
-	} else {
-		return n.Data, true, nil
+func Exp(ttl time.Duration) *time.Time {
+	exp := time.Now().Add(ttl)
+	return &exp
+}
+
+// Cache implements Interface.
+// Removal of expired items is the responsibility of the caller.
+type Cache struct {
+	values  map[interface{}]interface{}
+	exp     map[interface{}]*time.Time
+	maxsize int
+	mu      sync.RWMutex
+	metrics Metrics
+}
+
+// New returns a new Cache.
+// size determines the maximum number of items the cache can hold.
+// If set to zero or less the cache will not have a size limit.
+func New(size int) *Cache {
+	return &Cache{
+		values:  make(map[interface{}]interface{}),
+		exp:     make(map[interface{}]*time.Time),
+		maxsize: size,
 	}
 }
 
-// Fetch implements the Upstream interface for a cache
-func (c *Cache) Fetch(x interface{}) (interface{}, error) {
-	y, _, err := c.Get(x)
-	return y, err
+func (c *Cache) init() {
+	if c.values == nil {
+		c.values = make(map[interface{}]interface{})
+	}
+	if c.exp == nil {
+		c.exp = make(map[interface{}]*time.Time)
+	}
 }
 
-var zerotime = time.Time{}
-
-func (c *Cache) node(x interface{}, y interface{}) *Node {
-	n, _ := c.pool.Get().(*Node)
-	if c.MaxAge > 0 {
-		n.Exp = time.Now().Add(c.MaxAge)
-	} else {
-		n.Exp = zerotime
+// Set assigns a value to a key and sets the expiration time
+// If the size limit is reached it returns MaxSizeError.
+func (c *Cache) Set(k, v interface{}, exp *time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.values[k]; !ok && c.maxsize > 0 && len(c.values) >= c.maxsize {
+		return MaxSizeError
 	}
-	n.Key = x
-	n.Data = y
-	n.Requests = 0
-	return n
+	c.values[k] = v
+	if exp != nil {
+		c.exp[k] = exp
+	}
+	return nil
 }
 
-var (
-	NoUpstreamError = errors.New("No Upstream assigned to cache")
-)
-
-func (c *Cache) fetch(x interface{}) (interface{}, error) {
-	if nil == c.Upstream {
-		return nil, NoUpstreamError
-	}
-	rc := make(chan interface{}, 1)
-	ec := make(chan error, 1)
-	go func() {
-		y, err := c.Upstream.Fetch(x)
-		if err == nil {
-			c.add <- c.node(x, y)
+// Get returns a value assigned to a key and it's expiration time.
+// If a key does not exist in cache KeyError is returned.
+// If a key is expired ExpiredError is returned
+func (c *Cache) Get(k interface{}) (v interface{}, exp *time.Time, err error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var ok bool
+	if v, ok = c.values[k]; ok {
+		if exp = c.exp[k]; exp == nil || exp.After(time.Now()) {
+			atomic.AddInt64(&c.metrics.Hit, 1)
+			return
 		}
-		rc <- y
-		ec <- err
-	}()
-	return <-rc, <-ec
+		go func() {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			delete(c.values, k)
+			delete(c.exp, k)
+		}()
+		return nil, nil, ExpiredError
+	}
+	atomic.AddInt64(&c.metrics.Miss, 1)
+	return nil, nil, KeyError
+}
+
+// Size returns size of all keys in cache both expired and fresh
+func (c *Cache) Size() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.values)
+}
+
+// Trim removes all expired keys and returns a slice of removed keys
+func (c *Cache) Trim(now time.Time) []interface{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	expired := make([]interface{}, 0, len(c.exp))
+	for k, exp := range c.exp {
+		if exp != nil && exp.Before(now) {
+			expired = append(expired, k)
+		}
+	}
+	for _, k := range expired {
+		delete(c.exp, k)
+		delete(c.values, k)
+	}
+	c.metrics.Expired += int64(len(expired))
+	return expired
+}
+
+func (c *Cache) evict(keys []interface{}) (n int) {
+	for _, k := range keys {
+		if _, ok := c.values[k]; ok {
+			delete(c.values, k)
+			delete(c.exp, k)
+			n++
+		}
+	}
+	return
+}
+
+// Evict removes items from the cache. It returns the new cache size.
+func (c *Cache) Evict(keys ...interface{}) (size int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.metrics.Evict += int64(c.evict(keys))
+	return len(c.values)
+}
+
+type Metrics struct {
+	Hit, Miss, Evict, Expired, Items int64
+}
+
+func (c *Cache) Metrics() *Metrics {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	m := &Metrics{}
+	m.Hit = atomic.LoadInt64(&c.metrics.Hit)
+	m.Miss = atomic.LoadInt64(&c.metrics.Miss)
+	m.Evict = c.metrics.Evict
+	m.Expired = c.metrics.Expired
+	m.Items = int64(len(c.values))
+	return m
 }

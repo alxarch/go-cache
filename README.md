@@ -1,10 +1,12 @@
 # go-cache
-MaxAge and LRU cache for golang
+
+Cache structs for Go
 
 
-## Improvements needed
+## Basic cache
 
-  - Cap parallel requests
-  - Avoid duplicate requests (add backoff?)
-  - Add requests count threshold for evictions
-  - Goroutine to evict expired nodes
+Basic implements `Interface` that stores an unlimited number of items.
+It has no eviction policy removal of expired items is the responsibility of the
+user (via `Basic#Trim(time.Time)`).
+
+  
