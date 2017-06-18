@@ -165,13 +165,13 @@ func (c *Cache) Metrics() (m Metrics) {
 	return
 }
 
-type EvictionPolicy int
+type EvictionPolicy string
 
 const (
-	PolicyNone EvictionPolicy = iota
-	PolicyFIFO
-	PolicyLRU
-	PolicyLFU
+	PolicyNone EvictionPolicy = ""
+	PolicyFIFO EvictionPolicy = "FIFO"
+	PolicyLRU  EvictionPolicy = "LRU"
+	PolicyLFU  EvictionPolicy = "LFU"
 )
 
 func NewCache(size int, policy EvictionPolicy) Interface {
