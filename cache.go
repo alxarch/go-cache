@@ -164,4 +164,25 @@ func (c *Cache) Metrics() (m Metrics) {
 	m.Items = int64(len(c.values))
 	return
 }
+
+type EvictionPolicy int
+
+const (
+	PolicyNone EvictionPolicy = iota
+	PolicyFIFO
+	PolicyLRU
+	PolicyLFU
+)
+
+func NewCache(size int, policy EvictionPolicy) Interface {
+	switch policy {
+	case PolicyFIFO:
+		return NewFIFO(size)
+	case PolicyLRU:
+		return NewLRU(size)
+	case PolicyLFU:
+		return NewLFU(size)
+	default:
+		return New(size)
+	}
 }
