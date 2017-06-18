@@ -175,6 +175,9 @@ const (
 )
 
 func NewCache(size int, policy EvictionPolicy) Interface {
+	if size <= 0 {
+		return New(0)
+	}
 	switch policy {
 	case PolicyFIFO:
 		return NewFIFO(size)
