@@ -117,6 +117,6 @@ func (c *LFU) Trim(now time.Time) []interface{} {
 	return expired
 }
 
-func (c *LFU) Metrics() *Metrics {
+func (c *LFU) Metrics() Metrics {
 	return c.cache.Metrics()
 }

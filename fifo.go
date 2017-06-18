@@ -26,6 +26,10 @@ func NewFIFO(size int) *FIFO {
 
 }
 
+func (c *FIFO) Get(k interface{}) (v interface{}, exp *time.Time, err error) {
+	return c.cache.Get(k)
+}
+
 // Set assigns a value to a key and sets the expiration time.
 // If the size limit is reached the oldest item stored is evicted to insert the new one
 func (c *FIFO) Set(k, v interface{}, exp *time.Time) (err error) {
@@ -78,6 +82,6 @@ func (c *FIFO) Trim(now time.Time) []interface{} {
 	return expired
 }
 
-func (c *FIFO) Metrics() *Metrics {
+func (c *FIFO) Metrics() Metrics {
 	return c.cache.Metrics()
 }

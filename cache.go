@@ -24,6 +24,7 @@ type Interface interface {
 	// Evict drops the provided keys from cache (if they exist) and returns the new size of the cache.
 	// Calling Evict without arguments returns the current cache size.
 	Evict(keys ...interface{}) (size int)
+	Metrics() Metrics
 }
 
 // Never is a helper that returns a nil expiration time.
@@ -153,14 +154,14 @@ type Metrics struct {
 	Hit, Miss, Evict, Expired, Items int64
 }
 
-func (c *Cache) Metrics() *Metrics {
+func (c *Cache) Metrics() (m Metrics) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	m := &Metrics{}
 	m.Hit = atomic.LoadInt64(&c.metrics.Hit)
 	m.Miss = atomic.LoadInt64(&c.metrics.Miss)
 	m.Evict = c.metrics.Evict
 	m.Expired = c.metrics.Expired
 	m.Items = int64(len(c.values))
-	return m
+	return
+}
 }
