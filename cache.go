@@ -168,6 +168,7 @@ const (
 	PolicyFIFO EvictionPolicy = "FIFO"
 	PolicyLRU  EvictionPolicy = "LRU"
 	PolicyLFU  EvictionPolicy = "LFU"
+	PolicyTTL  EvictionPolicy = "TTL"
 )
 
 func NewCache(size int, policy EvictionPolicy) Interface {
@@ -181,6 +182,8 @@ func NewCache(size int, policy EvictionPolicy) Interface {
 		return NewLRU(size)
 	case PolicyLFU:
 		return NewLFU(size)
+	case PolicyTTL:
+		return NewTTL(size)
 	default:
 		return New(size)
 	}
