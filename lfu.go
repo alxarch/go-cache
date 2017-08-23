@@ -11,13 +11,13 @@ const DefaultLFUQueueSize = 100
 type LFU struct {
 	cache    *Cache
 	pending  chan interface{}
-	requests map[interface{}]int64
+	requests map[interface{}]uint64
 	mu       sync.Mutex
 }
 
 type lfu struct {
 	Key      interface{}
-	Requests int64
+	Requests uint64
 }
 
 func NewLFU(size int) *LFU {
@@ -26,7 +26,7 @@ func NewLFU(size int) *LFU {
 	}
 	return &LFU{
 		cache:    New(size),
-		requests: make(map[interface{}]int64),
+		requests: make(map[interface{}]uint64, size),
 		pending:  make(chan interface{}, size),
 	}
 }
@@ -82,17 +82,19 @@ func (c *LFU) lfus() []lfu {
 func (c *LFU) Set(x, y interface{}, exp *time.Time) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var lfus []lfu
+	if err = c.cache.Set(x, y, exp); err != ErrMaxSize {
+		return
+	}
+	lfus := c.lfus()
 	for i := 0; i < len(c.requests); i++ {
-		if err = c.cache.Set(x, y, exp); err == MaxSizeError {
-			if lfus == nil {
-				lfus = c.lfus()
-			}
-			k := lfus[i]
-			delete(c.requests, k)
-			c.cache.Evict(k)
+		k := lfus[i]
+		delete(c.requests, k)
+		c.cache.Evict(k)
+		if err = c.cache.Set(x, y, exp); err != ErrMaxSize {
+			return
 		}
 	}
+
 	return
 }
 

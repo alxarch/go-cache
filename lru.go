@@ -13,31 +13,36 @@ type LRU struct {
 	list    *list.List
 	pending chan interface{}
 	index   map[interface{}]*list.Element
-	mu      sync.Mutex
+
+	// Protects index and list
+	mu sync.Mutex
 }
 
-func NewLRU(size int) *LRU {
-	if size <= 0 {
-		return nil
+func NewLRU(size int) (c *LRU) {
+	if size > 0 {
+		c = &LRU{
+			cache:   New(size),
+			index:   make(map[interface{}]*list.Element),
+			list:    list.New(),
+			pending: make(chan interface{}, size),
+		}
 	}
-	return &LRU{
-		cache:   New(size),
-		index:   make(map[interface{}]*list.Element),
-		list:    list.New(),
-		pending: make(chan interface{}, size),
-	}
+	return
 }
 
 func (c *LRU) Flush() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.Flush()
+	c.flush()
 }
+
 func (c *LRU) flush() {
 	for {
 		select {
 		case p := <-c.pending:
-			c.list.MoveToFront(c.index[p])
+			if el := c.index[p]; el != nil {
+				c.list.MoveToFront(el)
+			}
 		default:
 			return
 		}
@@ -51,6 +56,7 @@ func (c *LRU) Get(x interface{}) (y interface{}, exp *time.Time, err error) {
 		case c.pending <- x:
 			// pass
 		default:
+			// Max pending changes in queue, reorder list
 			c.Flush()
 			c.pending <- x
 		}
@@ -61,25 +67,26 @@ func (c *LRU) Get(x interface{}) (y interface{}, exp *time.Time, err error) {
 func (c *LRU) Set(x, y interface{}, exp *time.Time) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.flush()
-	el := c.index[x]
-	if el == nil {
-		el = c.list.PushFront(x)
-		c.index[x] = el
-	} else {
-		c.list.MoveToFront(el)
-	}
-	for {
-		if err = c.cache.Set(x, y, exp); err == MaxSizeError {
-			if el = c.list.Back(); el != nil {
-				c.list.Remove(el)
-				k := el.Value
-				delete(c.index, k)
-				c.cache.Evict(k)
-			} else {
-				break
-			}
+	defer func() {
+		if _, ok := c.index[x]; !ok {
+			c.index[x] = c.list.PushBack(x)
 		}
+	}()
+	if err = c.cache.Set(x, y, exp); err != ErrMaxSize {
+		return
+	}
+	c.flush()
+	for err == ErrMaxSize {
+		// Evict elements until we have an open position for the new element
+		if el := c.list.Back(); el != nil {
+			c.list.Remove(el)
+			k := el.Value
+			delete(c.index, k)
+			c.cache.Evict(k)
+		} else {
+			break
+		}
+		err = c.cache.Set(x, y, exp)
 	}
 	return
 }
@@ -97,10 +104,11 @@ func (c *LRU) Evict(keys ...interface{}) int {
 	return c.cache.Evict(keys...)
 }
 
+// Trim removes expired pairs from the cache and LRU list
 func (c *LRU) Trim(now time.Time) []interface{} {
-	expired := c.cache.Trim(now)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	expired := c.cache.Trim(now)
 	c.flush()
 	for _, k := range expired {
 		if el := c.index[k]; el != nil {

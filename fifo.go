@@ -20,7 +20,7 @@ func NewFIFO(size int) *FIFO {
 	}
 	return &FIFO{
 		cache: New(size),
-		index: make(map[interface{}]*list.Element),
+		index: make(map[interface{}]*list.Element, size),
 		list:  list.New(),
 	}
 
@@ -35,22 +35,26 @@ func (c *FIFO) Get(k interface{}) (v interface{}, exp *time.Time, err error) {
 func (c *FIFO) Set(k, v interface{}, exp *time.Time) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	el := c.index[k]
-	if el == nil {
-		el = c.list.PushFront(k)
-		c.index[k] = el
-	}
-	for {
-		if err = c.cache.Set(k, v, exp); err == MaxSizeError {
-			if el = c.list.Back(); el != nil {
-				c.list.Remove(el)
-				k := el.Value
-				delete(c.index, k)
-				c.cache.Evict(k)
-			} else {
-				break
-			}
+	defer func() {
+		if el, ok := c.index[k]; !ok {
+			c.index[k] = c.list.PushFront(k)
+		} else {
+			c.list.PushFront(el)
 		}
+	}()
+	if err = c.cache.Set(k, v, exp); err != ErrMaxSize {
+		return
+	}
+	for err == ErrMaxSize {
+		if el := c.list.Back(); el != nil {
+			c.list.Remove(el)
+			key := el.Value
+			delete(c.index, key)
+			c.cache.Evict(key)
+		} else {
+			break
+		}
+		err = c.cache.Set(k, v, exp)
 	}
 	return
 }

@@ -8,16 +8,16 @@ import (
 )
 
 var (
-	// KeyError is returned by Get if a key is not found in the cache.
-	KeyError     = errors.New("Key not found.")
-	ExpiredError = errors.New("Key expired.")
-	// MaxSizeError is returned by Set on implementations of Interface that have max size limits.
-	MaxSizeError = errors.New("Cache full.")
+	// ErrKeyNotFound is returned by Get if a key is not found in the cache.
+	ErrKeyNotFound = errors.New("Key not found.")
+	ErrExpired     = errors.New("Key expired.")
+	// ErrMaxSize is returned by Set on implementations of Interface that have max size limits.
+	ErrMaxSize = errors.New("Cache full.")
 )
 
 // Interface is the common cache interface for all implementations.
 type Interface interface {
-	// Interface implements Upstream and returns KeyError if a key is not found in cache.
+	// Interface implements Upstream and returns ErrKeyNotFound if a key is not found in cache.
 	Upstream
 	// Set assigns a value to a key and sets the expiration time
 	Set(key, value interface{}, exp *time.Time) error
@@ -51,19 +51,14 @@ type Cache struct {
 // size determines the maximum number of items the cache can hold.
 // If set to zero or less the cache will not have a size limit.
 func New(size int) *Cache {
-	return &Cache{
-		values:  make(map[interface{}]interface{}),
-		exp:     make(map[interface{}]*time.Time),
-		maxsize: size,
+	if size < 0 {
+		size = 0
 	}
-}
 
-func (c *Cache) init() {
-	if c.values == nil {
-		c.values = make(map[interface{}]interface{})
-	}
-	if c.exp == nil {
-		c.exp = make(map[interface{}]*time.Time)
+	return &Cache{
+		values:  make(map[interface{}]interface{}, size),
+		exp:     make(map[interface{}]*time.Time, size),
+		maxsize: size,
 	}
 }
 
@@ -73,7 +68,7 @@ func (c *Cache) Set(k, v interface{}, exp *time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.values[k]; !ok && c.maxsize > 0 && len(c.values) >= c.maxsize {
-		return MaxSizeError
+		return ErrMaxSize
 	}
 	c.values[k] = v
 	if exp != nil {
@@ -88,22 +83,23 @@ func (c *Cache) Set(k, v interface{}, exp *time.Time) error {
 func (c *Cache) Get(k interface{}) (v interface{}, exp *time.Time, err error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	var ok bool
-	if v, ok = c.values[k]; ok {
-		if exp = c.exp[k]; exp == nil || exp.After(time.Now()) {
-			atomic.AddInt64(&c.metrics.Hit, 1)
-			return
+	defer func() {
+		if err == nil {
+			atomic.AddUint64(&c.metrics.Hit, 1)
+		} else {
+			atomic.AddUint64(&c.metrics.Miss, 1)
 		}
-		go func() {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			delete(c.values, k)
-			delete(c.exp, k)
-		}()
-		return nil, nil, ExpiredError
+	}()
+	var ok bool
+	if v, ok = c.values[k]; !ok {
+		err = ErrKeyNotFound
+		return
 	}
-	atomic.AddInt64(&c.metrics.Miss, 1)
-	return nil, nil, KeyError
+	if exp = c.exp[k]; exp == nil || exp.After(time.Now()) {
+		return
+	}
+	err = ErrExpired
+	return
 }
 
 // Size returns size of all keys in cache both expired and fresh
@@ -127,7 +123,7 @@ func (c *Cache) Trim(now time.Time) []interface{} {
 		delete(c.exp, k)
 		delete(c.values, k)
 	}
-	c.metrics.Expired += int64(len(expired))
+	atomic.AddUint64(&c.metrics.Expired, uint64(len(expired)))
 	return expired
 }
 
@@ -146,22 +142,22 @@ func (c *Cache) evict(keys []interface{}) (n int) {
 func (c *Cache) Evict(keys ...interface{}) (size int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.metrics.Evict += int64(c.evict(keys))
+	c.metrics.Evict += uint64(c.evict(keys))
 	return len(c.values)
 }
 
 type Metrics struct {
-	Hit, Miss, Evict, Expired, Items int64
+	Hit, Miss, Evict, Expired, Items uint64
 }
 
 func (c *Cache) Metrics() (m Metrics) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	m.Hit = atomic.LoadInt64(&c.metrics.Hit)
-	m.Miss = atomic.LoadInt64(&c.metrics.Miss)
+	m.Hit = atomic.LoadUint64(&c.metrics.Hit)
+	m.Miss = atomic.LoadUint64(&c.metrics.Miss)
 	m.Evict = c.metrics.Evict
 	m.Expired = c.metrics.Expired
-	m.Items = int64(len(c.values))
+	m.Items = uint64(len(c.values))
 	return
 }
 
