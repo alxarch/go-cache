@@ -82,14 +82,18 @@ func (c *LFU) lfus() []lfu {
 func (c *LFU) Set(x, y interface{}, exp *time.Time) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() {
+		if _, ok := c.requests[x]; !ok {
+			c.requests[x] = 0
+		}
+	}()
 	if err = c.cache.Set(x, y, exp); err != ErrMaxSize {
 		return
 	}
 	lfus := c.lfus()
-	for i := 0; i < len(c.requests); i++ {
-		k := lfus[i]
-		delete(c.requests, k)
-		c.cache.Evict(k)
+	for _, lfu := range lfus {
+		delete(c.requests, lfu.Key)
+		c.cache.Evict(lfu.Key)
 		if err = c.cache.Set(x, y, exp); err != ErrMaxSize {
 			return
 		}

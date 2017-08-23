@@ -36,7 +36,7 @@ func Test_LFU(t *testing.T) {
 	if bar, ok := y.(string); !ok || bar != "baz" {
 		t.Errorf("Invalid value %s", bar)
 	}
-	_, _, err = c.Get("baz")
+	_, _, err = c.Get("bar")
 	if err != cache.ErrKeyNotFound {
 		t.Errorf("invalid cache err %s", err)
 	}
