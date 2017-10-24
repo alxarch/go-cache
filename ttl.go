@@ -9,7 +9,7 @@ import (
 
 // TTL implements Interface with eviction of sooner-to-expire elements
 type TTL struct {
-	cache *Cache
+	*Cache
 	index map[interface{}]int64
 	mu    sync.Mutex
 }
@@ -19,14 +19,14 @@ func NewTTL(size int) *TTL {
 		return nil
 	}
 	return &TTL{
-		cache: New(size),
+		Cache: New(size),
 		index: make(map[interface{}]int64, size),
 	}
 
 }
 
-func (c *TTL) Get(k interface{}) (v interface{}, exp *time.Time, err error) {
-	return c.cache.Get(k)
+func (c *TTL) Get(k interface{}) (v interface{}, exp time.Time, err error) {
+	return c.Cache.Get(k)
 }
 
 type ttl struct {
@@ -48,26 +48,31 @@ func (c *TTL) ttls() []ttl {
 	return ttls
 }
 
+func (c *TTL) set(x interface{}, exp time.Time) {
+	score := int64(math.MaxInt64)
+	if !exp.IsZero() {
+		score = exp.UnixNano()
+	}
+	c.index[x] = score
+
+}
+
 // Set assigns a value to a key and sets the expiration time.
 // If the size limit is reached the oldest item stored is evicted to insert the new one
-func (c *TTL) Set(x, y interface{}, exp *time.Time) (err error) {
+func (c *TTL) Set(x, y interface{}, exp time.Time) (err error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer func() {
-		score := int64(math.MaxInt64)
-		if exp != nil {
-			score = exp.UnixNano()
-		}
-		c.index[x] = score
-	}()
-	if err = c.cache.Set(x, y, exp); err != ErrMaxSize {
+	if err = c.Cache.Set(x, y, exp); err != ErrMaxSize {
+		c.set(x, exp)
+		c.mu.Unlock()
 		return
 	}
 	ttls := c.ttls()
 	for _, ttl := range ttls {
 		delete(c.index, ttl.Key)
-		c.cache.Evict(ttl.Key)
-		if err = c.cache.Set(x, y, exp); err != ErrMaxSize {
+		c.Cache.Evict(ttl.Key)
+		if err = c.Cache.Set(x, y, exp); err != ErrMaxSize {
+			c.set(x, exp)
+			c.mu.Unlock()
 			return
 		}
 	}
@@ -75,27 +80,23 @@ func (c *TTL) Set(x, y interface{}, exp *time.Time) (err error) {
 	return
 }
 
-func (c *TTL) Evict(keys ...interface{}) int {
+func (c *TTL) Evict(keys ...interface{}) (n int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for _, k := range keys {
 		delete(c.index, k)
 	}
-
-	return c.cache.Evict(keys...)
+	n = c.Cache.Evict(keys...)
+	c.mu.Unlock()
+	return
 
 }
 
 func (c *TTL) Trim(now time.Time) []interface{} {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	expired := c.cache.Trim(now)
+	expired := c.Cache.Trim(now)
 	for _, k := range expired {
 		delete(c.index, k)
 	}
+	c.mu.Unlock()
 	return expired
-}
-
-func (c *TTL) Metrics() Metrics {
-	return c.cache.Metrics()
 }

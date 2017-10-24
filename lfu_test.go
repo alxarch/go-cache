@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"testing"
+	"time"
 
 	cache "github.com/alxarch/go-cache"
 )
@@ -20,11 +21,11 @@ func Test_LFU(t *testing.T) {
 	if m.Evict != 0 || m.Expired != 0 || m.Hit != 0 || m.Items != 0 || m.Miss != 0 {
 		t.Error("Invalid metrics")
 	}
-	c.Set("foo", "bar", nil)
-	c.Set("foo", "baz", nil)
-	c.Set("bar", "baz", nil)
+	c.Set("foo", "bar", cache.Never())
+	c.Set("foo", "baz", cache.Never())
+	c.Set("bar", "baz", cache.Never())
 	c.Get("foo")
-	c.Set("baz", "foo", nil)
+	c.Set("baz", "foo", cache.Never())
 	n := c.Evict()
 	if n != 2 {
 		t.Errorf("invalid cache size %d", n)
@@ -39,5 +40,15 @@ func Test_LFU(t *testing.T) {
 	_, _, err = c.Get("bar")
 	if err != cache.ErrKeyNotFound {
 		t.Errorf("invalid cache err %s", err)
+	}
+	now := time.Now().Add(time.Hour)
+	c = cache.NewLFU(3)
+	c.Set("foo", "bar", now.Add(-time.Second))
+	c.Get("foo")
+	c.Set("bar", "baz", now)
+	c.Set("baz", "foo", now.Add(time.Second))
+	keys := c.Trim(now)
+	if len(keys) != 1 {
+		t.Errorf("invalid trim %d", len(keys))
 	}
 }

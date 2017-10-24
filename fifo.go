@@ -8,7 +8,7 @@ import (
 
 // FIFO implements Interface with a first-in-first-out eviction policy.
 type FIFO struct {
-	cache *Cache
+	*Cache
 	list  *list.List
 	index map[interface{}]*list.Element
 	mu    sync.Mutex
@@ -19,73 +19,66 @@ func NewFIFO(size int) *FIFO {
 		return nil
 	}
 	return &FIFO{
-		cache: New(size),
+		Cache: New(size),
 		index: make(map[interface{}]*list.Element, size),
 		list:  list.New(),
 	}
 
 }
 
-func (c *FIFO) Get(k interface{}) (v interface{}, exp *time.Time, err error) {
-	return c.cache.Get(k)
+func (c *FIFO) Get(k interface{}) (v interface{}, exp time.Time, err error) {
+	return c.Cache.Get(k)
 }
 
 // Set assigns a value to a key and sets the expiration time.
 // If the size limit is reached the oldest item stored is evicted to insert the new one
-func (c *FIFO) Set(k, v interface{}, exp *time.Time) (err error) {
+func (c *FIFO) Set(k, v interface{}, exp time.Time) (err error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer func() {
-		if el, ok := c.index[k]; !ok {
-			c.index[k] = c.list.PushFront(k)
-		} else {
-			c.list.PushFront(el)
+	for {
+		if err = c.Cache.Set(k, v, exp); err != ErrMaxSize {
+			break
 		}
-	}()
-	if err = c.cache.Set(k, v, exp); err != ErrMaxSize {
-		return
-	}
-	for err == ErrMaxSize {
 		if el := c.list.Back(); el != nil {
 			c.list.Remove(el)
 			key := el.Value
 			delete(c.index, key)
-			c.cache.Evict(key)
+			c.Cache.Evict(key)
 		} else {
 			break
 		}
-		err = c.cache.Set(k, v, exp)
 	}
+	if el, ok := c.index[k]; !ok {
+		c.index[k] = c.list.PushFront(k)
+	} else {
+		c.list.PushFront(el)
+	}
+	c.mu.Unlock()
 	return
 }
 
 func (c *FIFO) Evict(keys ...interface{}) int {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for _, k := range keys {
 		if el := c.index[k]; el != nil {
 			c.list.Remove(el)
 			delete(c.index, k)
 		}
 	}
+	c.mu.Unlock()
 
-	return c.cache.Evict(keys...)
+	return c.Cache.Evict(keys...)
 
 }
 
 func (c *FIFO) Trim(now time.Time) []interface{} {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	expired := c.cache.Trim(now)
+	expired := c.Cache.Trim(now)
 	for _, k := range expired {
 		if el := c.index[k]; el != nil {
 			delete(c.index, k)
 			c.list.Remove(el)
 		}
 	}
+	c.mu.Unlock()
 	return expired
-}
-
-func (c *FIFO) Metrics() Metrics {
-	return c.cache.Metrics()
 }
