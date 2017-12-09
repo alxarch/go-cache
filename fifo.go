@@ -39,18 +39,20 @@ func (c *FIFO) Set(k, v interface{}, exp time.Time) (err error) {
 			break
 		}
 		if el := c.list.Back(); el != nil {
-			c.list.Remove(el)
-			key := el.Value
+			key := c.list.Remove(el)
 			delete(c.index, key)
 			c.Cache.Evict(key)
 		} else {
 			break
 		}
 	}
-	if el, ok := c.index[k]; !ok {
-		c.index[k] = c.list.PushFront(k)
-	} else {
-		c.list.PushFront(el)
+	if err == nil {
+		if el, ok := c.index[k]; !ok {
+			c.index[k] = c.list.PushFront(k)
+		} else {
+			c.list.PushFront(el)
+		}
+
 	}
 	c.mu.Unlock()
 	return

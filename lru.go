@@ -69,8 +69,10 @@ func (c *LRU) Set(x, y interface{}, exp time.Time) (err error) {
 	c.mu.Lock()
 	for {
 		if err = c.Cache.Set(x, y, exp); err != ErrMaxSize {
-			if _, ok := c.index[x]; !ok {
-				c.index[x] = c.list.PushBack(x)
+			if err == nil {
+				if _, ok := c.index[x]; !ok {
+					c.index[x] = c.list.PushBack(x)
+				}
 			}
 			c.mu.Unlock()
 			return
@@ -81,8 +83,7 @@ func (c *LRU) Set(x, y interface{}, exp time.Time) (err error) {
 		}
 		// Evict elements until we have an open position for the new element
 		if el := c.list.Back(); el != nil {
-			c.list.Remove(el)
-			k := el.Value
+			k := c.list.Remove(el)
 			delete(c.index, k)
 			c.Cache.Evict(k)
 		} else {

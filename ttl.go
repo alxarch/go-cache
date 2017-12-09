@@ -62,7 +62,9 @@ func (c *TTL) set(x interface{}, exp time.Time) {
 func (c *TTL) Set(x, y interface{}, exp time.Time) (err error) {
 	c.mu.Lock()
 	if err = c.Cache.Set(x, y, exp); err != ErrMaxSize {
-		c.set(x, exp)
+		if err == nil {
+			c.set(x, exp)
+		}
 		c.mu.Unlock()
 		return
 	}
@@ -71,7 +73,9 @@ func (c *TTL) Set(x, y interface{}, exp time.Time) (err error) {
 		delete(c.index, ttl.Key)
 		c.Cache.Evict(ttl.Key)
 		if err = c.Cache.Set(x, y, exp); err != ErrMaxSize {
-			c.set(x, exp)
+			if err == nil {
+				c.set(x, exp)
+			}
 			c.mu.Unlock()
 			return
 		}

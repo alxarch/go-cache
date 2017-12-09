@@ -93,8 +93,10 @@ func (c *LFU) lfus() []lfu {
 func (c *LFU) Set(x, y interface{}, exp time.Time) (err error) {
 	c.mu.Lock()
 	if err = c.Cache.Set(x, y, exp); err != ErrMaxSize {
-		if _, ok := c.requests[x]; !ok {
-			c.requests[x] = 0
+		if err == nil {
+			if _, ok := c.requests[x]; !ok {
+				c.requests[x] = 0
+			}
 		}
 		c.mu.Unlock()
 		return
@@ -104,8 +106,10 @@ func (c *LFU) Set(x, y interface{}, exp time.Time) (err error) {
 		delete(c.requests, lfu.Key)
 		c.Cache.Evict(lfu.Key)
 		if err = c.Cache.Set(x, y, exp); err != ErrMaxSize {
-			if _, ok := c.requests[x]; !ok {
-				c.requests[x] = 0
+			if err == nil {
+				if _, ok := c.requests[x]; !ok {
+					c.requests[x] = 0
+				}
 			}
 			c.mu.Unlock()
 			return
