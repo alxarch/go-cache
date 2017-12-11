@@ -22,7 +22,7 @@ type blockingUpstream struct {
 }
 
 type pending struct {
-	done  chan struct{}
+	wg    sync.WaitGroup
 	exp   time.Time
 	value interface{}
 	err   error
@@ -40,9 +40,8 @@ func (b *blockingUpstream) get(x interface{}) (p *pending) {
 		b.mu.Unlock()
 		return p
 	}
-	p = &pending{
-		done: make(chan struct{}),
-	}
+	p = &pending{}
+	p.wg.Add(1)
 	b.pending[x] = p
 	b.mu.Unlock()
 
@@ -51,15 +50,14 @@ func (b *blockingUpstream) get(x interface{}) (p *pending) {
 		b.mu.Lock()
 		delete(b.pending, x)
 		b.mu.Unlock()
-		close(p.done)
-
+		p.wg.Done()
 	}()
 	return p
 }
 
 func (b *blockingUpstream) Get(x interface{}) (interface{}, time.Time, error) {
 	p := b.get(x)
-	<-p.done
+	p.wg.Wait()
 	return p.value, p.exp, p.err
 }
 
